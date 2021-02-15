@@ -1,0 +1,49 @@
+<launch>
+
+    <arg name="project" default="lio_sam"/>
+
+   <!--- VectorNav IMU -->
+  <node pkg="vectornav" type="vnpub" name="vectornav" output="screen" >
+    <rosparam command="load" file="$(find vectornav)/params/vn100.yaml" />
+  </node>
+
+  <!-- -->
+  <node pkg="imu_filter_madgwick" type="imu_filter_node" name="imu_filter_node" output="screen" >
+    <param name="use_magnetic_field_msg" value="true" />	
+    <param name="publish_debug_topics" value="true" />
+    <remap from="imu/data_raw" to="vectornav/IMU" />
+    <remap from="imu/mag" to="vectornav/Mag" />
+  </node>
+  
+
+   <!--- ublox DGPS
+    <include file="$(find ublox_gps)/launch/ublox_zed-f9p.launch" />
+   -->
+
+   <!--- RS-Lidar16 in nodelet-->
+    <include file="$(find rslidar_sdk)/launch/start.launch" />
+
+
+  <!-- Pretreatment RS-Lidar16 for LIO-SAM: Run a passthrough filter to clean NaNs -->
+  <node pkg="nodelet" type="nodelet" name="pcl_manager" args="manager" output="screen" />
+  <node pkg="nodelet" type="nodelet" name="passthrough" args="load pcl/PassThrough pcl_manager" output="screen">
+    <remap from="~input" to="/rslidar_points" />
+    <remap from="/passthrough/output" to="/rslidar_points_dense" />
+    
+    <rosparam>
+      filter_field_name: z
+      filter_limit_negative: True
+    </rosparam>
+
+   <rosparam>
+      filter_field_name: x
+      filter_limit_negative: True
+    </rosparam>
+
+   <rosparam>
+      filter_field_name: y
+      filter_limit_negative: True
+    </rosparam>
+  </node>
+
+</launch>

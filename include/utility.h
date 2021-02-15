@@ -57,7 +57,7 @@ using namespace std;
 
 typedef pcl::PointXYZI PointType;
 
-enum class SensorType { VELODYNE, OUSTER };
+enum class SensorType { VELODYNE, OUSTER, RS };
 
 class ParamServer
 {
@@ -152,7 +152,7 @@ public:
 
     ParamServer()
     {
-        nh.param<std::string>("/robot_id", robot_id, "roboat");
+        nh.param<std::string>("/robot_id", robot_id, "robot");
 
         nh.param<std::string>("lio_sam/pointCloudTopic", pointCloudTopic, "points_raw");
         nh.param<std::string>("lio_sam/imuTopic", imuTopic, "imu_correct");
@@ -182,10 +182,14 @@ public:
         {
             sensor = SensorType::OUSTER;
         }
+        else if (sensorStr == "RS")
+        {
+            sensor = SensorType::RS;
+        }
         else
         {
             ROS_ERROR_STREAM(
-                "Invalid sensor type (must be either 'velodyne' or 'ouster'): " << sensorStr);
+                "Invalid sensor type (must be either 'velodyne' or 'ouster' or 'RS'): " << sensorStr);
             ros::shutdown();
         }
 
@@ -259,13 +263,32 @@ public:
         imu_out.angular_velocity.x = gyr.x();
         imu_out.angular_velocity.y = gyr.y();
         imu_out.angular_velocity.z = gyr.z();
+
         // rotate roll pitch yaw
         Eigen::Quaterniond q_from(imu_in.orientation.w, imu_in.orientation.x, imu_in.orientation.y, imu_in.orientation.z);
+        //cout <<"************** inimConverter() ------------------------"<< endl;
+        //cout <<"************** Quaternion received in imuConverter() "<< "x: " <<q_from.x() << ", y: " << q_from.y() << ", z: " << q_from.z() << ", w: " << q_from.w() << endl << endl;
         Eigen::Quaterniond q_final = q_from * extQRPY;
-        imu_out.orientation.x = q_final.x();
-        imu_out.orientation.y = q_final.y();
-        imu_out.orientation.z = q_final.z();
-        imu_out.orientation.w = q_final.w();
+        //cout <<"************** q_final_ by quaternion multiplication"<< "x: " <<q_final.x() << ", y: " << q_final.y() << ", z: " << q_final.z() << ", w: " << q_final.w() << endl << endl;
+         
+        double imuRoll, imuPitch, imuYaw;
+        tf::Quaternion orientation;
+        tf::quaternionMsgToTF(imu_in.orientation, orientation);         
+        tf::Matrix3x3(orientation).getRPY(imuRoll, imuPitch, imuYaw);
+        Eigen::Vector3d rpy_imu(imuRoll, imuPitch, imuYaw);
+        //cout << "************** in imuConverter(): rpy_imu before transformation: " << rpy_imu << endl;
+
+        rpy_imu = extRPY * rpy_imu;
+        //cout << "************** in imuConverter(): rpy_imu after transformation: " << rpy_imu << endl;
+
+        tf::Quaternion q_finalTF;
+        q_finalTF.setRPY(rpy_imu[0], rpy_imu[1], rpy_imu[2]);
+        //cout <<"************** q_finalTF by rotationMatrix" << "x: " <<q_finalTF.x() << ", y: " << q_finalTF.y() << ", z: " << q_finalTF.z() << ", w: " << q_finalTF.w() << endl << endl;
+
+        imu_out.orientation.x = q_finalTF.x();
+        imu_out.orientation.y = q_finalTF.y();
+        imu_out.orientation.z = q_finalTF.z();
+        imu_out.orientation.w = q_finalTF.w();
 
         if (sqrt(q_final.x()*q_final.x() + q_final.y()*q_final.y() + q_final.z()*q_final.z() + q_final.w()*q_final.w()) < 0.1)
         {

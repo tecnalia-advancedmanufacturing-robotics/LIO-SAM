@@ -30,6 +30,20 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(OusterPointXYZIRT,
     (uint8_t, ring, ring) (uint16_t, noise, noise) (uint32_t, range, range)
 )
 
+struct RsPointXYZIRT
+{
+  PCL_ADD_POINT4D;
+  uint8_t intensity;
+  uint16_t ring = 0;
+  double timestamp = 0;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+POINT_CLOUD_REGISTER_POINT_STRUCT(RsPointXYZIRT, 
+    (float, x, x)(float, y, y)(float, z, z)(uint8_t, intensity, intensity)
+    (uint16_t, ring, ring)(double, timestamp, timestamp)
+)
+
+
 // Use the Velodyne point format as a common representation
 using PointXYZIRT = VelodynePointXYZIRT;
 
@@ -68,6 +82,7 @@ private:
 
     pcl::PointCloud<PointXYZIRT>::Ptr laserCloudIn;
     pcl::PointCloud<OusterPointXYZIRT>::Ptr tmpOusterCloudIn;
+    pcl::PointCloud<RsPointXYZIRT>::Ptr tmpRsCloudIn;
     pcl::PointCloud<PointType>::Ptr   fullCloud;
     pcl::PointCloud<PointType>::Ptr   extractedCloud;
 
@@ -106,6 +121,8 @@ public:
     {
         laserCloudIn.reset(new pcl::PointCloud<PointXYZIRT>());
         tmpOusterCloudIn.reset(new pcl::PointCloud<OusterPointXYZIRT>());
+	tmpRsCloudIn.reset(new pcl::PointCloud<RsPointXYZIRT>());
+
         fullCloud.reset(new pcl::PointCloud<PointType>());
         extractedCloud.reset(new pcl::PointCloud<PointType>());
 
@@ -144,27 +161,45 @@ public:
 
     void imuHandler(const sensor_msgs::Imu::ConstPtr& imuMsg)
     {
+        //DEBUG 
+        /*
+         double imuRoll, imuPitch, imuYaw;
+         tf::Quaternion orientation;
+         
+         sensor_msgs::Imu originalImu =*imuMsg;
+         tf::quaternionMsgToTF(originalImu.orientation, orientation);         
+         cout << "++++++ in DEBUG imuHandler() " << endl;
+         //cout << "++++++ Quaternion received from IMU in IMUHandler() before transformation: " << "x: " <<orientation.getX() << ", y: " << orientation.getY() << ", z: " << orientation.getZ() << ", w: " << orientation.getW() << endl << endl;
+         tf::Matrix3x3(orientation).getRPY(imuRoll, imuPitch, imuYaw);  
+         cout << "++++++ IMU roll pitch yaw using tf, from the IMU Quaternion before converter: " << endl;
+         cout << "++++++ roll: " << imuRoll << ", pitch: " << imuPitch <<", yaw: " << imuYaw << endl;
+         //END DEBUG
+        */
         sensor_msgs::Imu thisImu = imuConverter(*imuMsg);
 
         std::lock_guard<std::mutex> lock1(imuLock);
         imuQueue.push_back(thisImu);
 
-        // debug IMU data
-        // cout << std::setprecision(6);
-        // cout << "IMU acc: " << endl;
-        // cout << "x: " << thisImu.linear_acceleration.x << 
-        //       ", y: " << thisImu.linear_acceleration.y << 
-        //       ", z: " << thisImu.linear_acceleration.z << endl;
-        // cout << "IMU gyro: " << endl;
-        // cout << "x: " << thisImu.angular_velocity.x << 
-        //       ", y: " << thisImu.angular_velocity.y << 
-        //       ", z: " << thisImu.angular_velocity.z << endl;
-        // double imuRoll, imuPitch, imuYaw;
-        // tf::Quaternion orientation;
-        // tf::quaternionMsgToTF(thisImu.orientation, orientation);
-        // tf::Matrix3x3(orientation).getRPY(imuRoll, imuPitch, imuYaw);
-        // cout << "IMU roll pitch yaw: " << endl;
-        // cout << "roll: " << imuRoll << ", pitch: " << imuPitch << ", yaw: " << imuYaw << endl << endl;
+	//DEBUG
+        /*
+        //debug IMU data         
+         cout << std::setprecision(6);
+         cout << "++++++ IMU acc: " << endl;
+         cout << "++++++ x: " << thisImu.linear_acceleration.x << 
+               ", y: " << thisImu.linear_acceleration.y << 
+               ", z: " << thisImu.linear_acceleration.z << endl;
+         cout << "++++++ IMU gyro: " << endl;
+         cout << "++++++ x: " << thisImu.angular_velocity.x << 
+               ", y: " << thisImu.angular_velocity.y << 
+               ", z: " << thisImu.angular_velocity.z << endl;
+         
+         tf::quaternionMsgToTF(thisImu.orientation, orientation);         
+         //cout << "++++++ Quaternion from IMU Transformed by imuConverter(): " << "x: " <<orientation.getX() << ", y: " << orientation.getY() << ", z: " << orientation.getZ() << ", w: " << orientation.getW() << endl << endl;
+
+         tf::Matrix3x3(orientation).getRPY(imuRoll, imuPitch, imuYaw);         
+         cout << "++++++ IMU roll pitch yaw using tf, from the converted Quaternion: "<<endl;
+         cout << "++++++ roll: " << imuRoll << ", pitch: " << imuPitch <<", yaw: " << imuYaw << endl;
+         */
     }
 
     void odometryHandler(const nav_msgs::Odometry::ConstPtr& odometryMsg)
@@ -173,26 +208,44 @@ public:
         odomQueue.push_back(*odometryMsg);
     }
 
+
+    double getTime(void)
+    {
+    const auto t = std::chrono::high_resolution_clock::now();
+    const auto t_sec = std::chrono::duration_cast<std::chrono::duration<double>>(t.time_since_epoch());
+    return (double)t_sec.count();
+    }
+
     void cloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
         if (!cachePointCloud(laserCloudMsg))
             return;
+        ROS_DEBUG("Passed cachePointCloud()" );
+        ROS_DEBUG("rosTime= %f; systemTime= %f; Difference= %f", ros::Time::now().toSec(), getTime(), ros::Time::now().toSec()-getTime());
 
+        
         if (!deskewInfo())
             return;
+        ROS_DEBUG("Passed deskewInfo()" );
 
         projectPointCloud();
+        ROS_DEBUG("Passed projectPointCloud()" );
 
         cloudExtraction();
+        ROS_DEBUG("Passed cloudExtraction()" );
 
         publishClouds();
+        ROS_DEBUG("Passed publishClouds()" );
 
         resetParameters();
+        ROS_DEBUG("Passed resetParameters()" );
+
     }
 
     bool cachePointCloud(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
-        // cache point cloud
+        
+	// cache point cloud
         cloudQueue.push_back(*laserCloudMsg);
         if (cloudQueue.size() <= 2)
             return false;
@@ -200,7 +253,8 @@ public:
         // convert cloud
         currentCloudMsg = std::move(cloudQueue.front());
         cloudQueue.pop_front();
-        if (sensor == SensorType::VELODYNE)
+        
+	if (sensor == SensorType::VELODYNE)
         {
             pcl::moveFromROSMsg(currentCloudMsg, *laserCloudIn);
         }
@@ -222,6 +276,25 @@ public:
                 dst.time = src.t * 1e-9f;
             }
         }
+	else if (sensor == SensorType::RS)
+        {
+            // Convert to Velodyne format
+	    pcl::fromROSMsg(currentCloudMsg, *tmpRsCloudIn);
+            laserCloudIn->points.resize(tmpRsCloudIn->size());
+            laserCloudIn->is_dense = tmpRsCloudIn->is_dense;
+            for (size_t i = 0; i < tmpRsCloudIn->size(); i++)
+            {
+                auto &src = tmpRsCloudIn->points[i];
+                auto &dst = laserCloudIn->points[i];
+                dst.x = src.x;
+                dst.y = src.y;
+                dst.z = src.z;
+                dst.intensity = src.intensity;
+                dst.ring = src.ring;
+                dst.time = src.timestamp;
+		
+	     }
+        }
         else
         {
             ROS_ERROR_STREAM("Unknown sensor type: " << int(sensor));
@@ -231,7 +304,9 @@ public:
         // get timestamp
         cloudHeader = currentCloudMsg.header;
         timeScanCur = cloudHeader.stamp.toSec();
-        timeScanEnd = timeScanCur + laserCloudIn->points.back().time;
+        timeScanEnd =  laserCloudIn->points.back().time; //timeScanCur + laserCloudIn->points.back().time;
+	    ROS_DEBUG("laserCloudIn->points.back().time = %f", laserCloudIn->points.back().time);
+	
 
         // check dense flag
         if (laserCloudIn->is_dense == false)
@@ -266,7 +341,7 @@ public:
             deskewFlag = -1;
             for (auto &field : currentCloudMsg.fields)
             {
-                if (field.name == "time" || field.name == "t")
+                if (field.name == "time" || field.name == "t" || field.name == "timestamp")
                 {
                     deskewFlag = 1;
                     break;
@@ -287,7 +362,8 @@ public:
         // make sure IMU data available for the scan
         if (imuQueue.empty() || imuQueue.front().header.stamp.toSec() > timeScanCur || imuQueue.back().header.stamp.toSec() < timeScanEnd)
         {
-            ROS_DEBUG("Waiting for IMU data ...");
+            
+	    ROS_DEBUG("Waiting for IMU data: ImuQueueSize: %d ...%f ...%f... %f....%f", imuQueue.size(), imuQueue.front().header.stamp.toSec(), timeScanCur , imuQueue.back().header.stamp.toSec(), timeScanEnd);
             return false;
         }
 
@@ -600,6 +676,7 @@ int main(int argc, char** argv)
     ImageProjection IP;
     
     ROS_INFO("\033[1;32m----> Image Projection Started.\033[0m");
+    
 
     ros::MultiThreadedSpinner spinner(3);
     spinner.spin();
